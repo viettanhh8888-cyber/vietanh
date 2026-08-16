@@ -42,26 +42,31 @@ export default function Home() {
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     try {
       setUploading(true);
-      const file = e.target.files?.[0];
-      if (!file) return;
+      const originalFile = e.target.files?.[0];
+      if (!originalFile) return;
 
       // Lấy đuôi file
-      const fileExt = file.name.split(".").pop() || "jpg";
-      
-      // Tạo tên file an toàn tuyệt đối (Chỉ dùng chữ cái tiếng Anh không dấu và số)
-      const cleanName = file.name
+      const fileExt = originalFile.name.split(".").pop() || "jpg";
+
+      // Chuẩn hóa tên file: xóa dấu tiếng Việt, khoảng trắng và ký tự đặc biệt
+      const cleanName = originalFile.name
         .split(".")[0]
         .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "") // Xóa dấu tiếng Việt
-        .replace(/[^a-zA-Z0-9]/g, "_")  // Sửa ký tự đặc biệt/khoảng trắng thành _
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-zA-Z0-9]/g, "_")
         .toLowerCase();
 
       const fileName = `${Date.now()}_${cleanName}.${fileExt}`;
 
-      // Upload lên Supabase Storage (Bucket name: 'images')
+      // Tạo File object mới để loại bỏ hoàn toàn tên file chứa tiếng Việt trong HTTP Headers
+      const cleanFile = new File([originalFile], fileName, {
+        type: originalFile.type,
+      });
+
+      // Upload file đã làm sạch tên lên Supabase Storage (Bucket name: 'images')
       const { error: uploadError } = await supabase.storage
         .from("images")
-        .upload(fileName, file, {
+        .upload(fileName, cleanFile, {
           cacheControl: "3600",
           upsert: false,
         });
@@ -73,7 +78,7 @@ export default function Home() {
         .from("images")
         .getPublicUrl(fileName);
 
-      const originalTitle = file.name.split(".")[0] || "Khoảnh khắc mới";
+      const originalTitle = originalFile.name.split(".")[0] || "Khoảnh khắc mới";
 
       // Lưu thông tin ảnh vào bảng Database 'images'
       const { data: dbData, error: dbError } = await supabase
