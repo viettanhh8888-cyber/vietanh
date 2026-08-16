@@ -16,19 +16,26 @@ export default function Home() {
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  // 1. Lấy danh sách ảnh từ Supabase Database
+  // Lấy danh sách ảnh từ Database
   const fetchImages = async () => {
     try {
       setLoading(true);
+
       const { data, error } = await supabase
         .from("images")
         .select("*")
         .order("created_at", { ascending: false });
 
-      if (error) throw error;
-      if (data) setImages(data);
+      if (error) {
+        throw error;
+      }
+
+      if (data) {
+        setImages(data);
+      }
     } catch (error: any) {
-      console.error("Lỗi lấy danh sách ảnh:", error.message);
+      console.error("Lỗi lấy danh sách ảnh:", error);
+      alert("Lỗi lấy danh sách ảnh: " + error.message);
     } finally {
       setLoading(false);
     }
@@ -38,49 +45,92 @@ export default function Home() {
     fetchImages();
   }, []);
 
-  // 2. Xử lý Upload ảnh lên Supabase Storage
-  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Làm sạch tên file
+  const createSafeFileName = (originalName: string) => {
+    const parts = originalName.split(".");
+    const extension =
+      parts.length > 1
+        ? parts[parts.length - 1]
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "")
+            .replace(/[^a-zA-Z0-9]/g, "")
+            .toLowerCase()
+        : "jpg";
+
+    const nameWithoutExtension = parts
+      .slice(0, -1)
+      .join(".")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-zA-Z0-9]/g, "_")
+      .replace(/_+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .toLowerCase();
+
+    const safeName = nameWithoutExtension || "image";
+
+    return `${Date.now()}_${safeName}.${extension || "jpg"}`;
+  };
+
+  // Upload ảnh
+  const handleUpload = async (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const originalFile = e.target.files?.[0];
+
+    // Reset input
+    e.target.value = "";
+
+    if (!originalFile) {
+      return;
+    }
+
     try {
       setUploading(true);
-      const originalFile = e.target.files?.[0];
-      if (!originalFile) return;
 
-      // Lấy đuôi file
-      const fileExt = originalFile.name.split(".").pop() || "jpg";
+      // Kiểm tra file có phải ảnh không
+      if (!originalFile.type.startsWith("image/")) {
+        throw new Error("Vui lòng chọn một file ảnh.");
+      }
 
-      // Chuẩn hóa tên file: xóa dấu tiếng Việt, khoảng trắng và ký tự đặc biệt
-      const cleanName = originalFile.name
-        .split(".")[0]
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .replace(/[^a-zA-Z0-9]/g, "_")
-        .toLowerCase();
+      // Giới hạn 10MB
+      if (originalFile.size > 10 * 1024 * 1024) {
+        throw new Error("Ảnh không được lớn hơn 10MB.");
+      }
 
-      const fileName = `${Date.now()}_${cleanName}.${fileExt}`;
+      // Tạo tên file hoàn toàn không có ký tự tiếng Việt
+      const fileName = createSafeFileName(originalFile.name);
 
-      // Tạo File object mới để loại bỏ hoàn toàn tên file chứa tiếng Việt trong HTTP Headers
-      const cleanFile = new File([originalFile], fileName, {
-        type: originalFile.type,
-      });
+      console.log("Tên file upload:", fileName);
 
-      // Upload file đã làm sạch tên lên Supabase Storage (Bucket name: 'images')
+      // Upload lên Supabase Storage
       const { error: uploadError } = await supabase.storage
         .from("images")
-        .upload(fileName, cleanFile, {
+        .upload(fileName, originalFile, {
           cacheControl: "3600",
           upsert: false,
+          contentType: originalFile.type,
         });
 
-      if (uploadError) throw uploadError;
+      if (uploadError) {
+        throw uploadError;
+      }
 
-      // Lấy đường link công khai của ảnh
+      // Lấy URL công khai
       const { data: urlData } = supabase.storage
         .from("images")
         .getPublicUrl(fileName);
 
-      const originalTitle = originalFile.name.split(".")[0] || "Khoảnh khắc mới";
+      if (!urlData?.publicUrl) {
+        throw new Error("Không lấy được đường dẫn ảnh.");
+      }
 
-      // Lưu thông tin ảnh vào bảng Database 'images'
+      // Tên hiển thị giữ nguyên tên gốc
+      const originalTitle =
+        originalFile.name.replace(/\.[^/.]+$/, "") ||
+        "Khoảnh khắc mới";
+
+      // Lưu thông tin vào Database
       const { data: dbData, error: dbError } = await supabase
         .from("images")
         .insert([
@@ -93,99 +143,264 @@ export default function Home() {
         ])
         .select();
 
-      if (dbError) throw dbError;
+      if (dbError) {
+        // Nếu Database lỗi thì xóa ảnh vừa upload
+        await supabase.storage
+          .from("images")
+          .remove([fileName]);
 
-      if (dbData) {
+        throw dbError;
+      }
+
+      if (dbData && dbData.length > 0) {
         setImages((prev) => [dbData[0], ...prev]);
       }
 
       alert("Tải ảnh lên thành công!");
     } catch (error: any) {
-      alert("Lỗi tải ảnh: " + error.message);
+      console.error("Lỗi upload:", error);
+
+      alert(
+        "Lỗi tải ảnh: " +
+          (error?.message || "Không xác định được lỗi.")
+      );
     } finally {
       setUploading(false);
     }
   };
 
-  // 3. Xử lý Xóa ảnh
-  const handleDelete = async (id?: number, fileName?: string) => {
-    if (!id || !fileName) return;
-    if (!confirm("Bạn có chắc chắn muốn xóa ảnh này?")) return;
+  // Xóa ảnh
+  const handleDelete = async (
+    id?: number,
+    fileName?: string
+  ) => {
+    if (!id || !fileName) {
+      return;
+    }
+
+    const confirmed = confirm(
+      "Bạn có chắc chắn muốn xóa ảnh này?"
+    );
+
+    if (!confirmed) {
+      return;
+    }
 
     try {
-      // Xóa file khỏi Storage
+      // Xóa file trong Storage
       const { error: storageError } = await supabase.storage
         .from("images")
         .remove([fileName]);
 
-      if (storageError) throw storageError;
+      if (storageError) {
+        throw storageError;
+      }
 
-      // Xóa bản ghi khỏi Database
+      // Xóa Database
       const { error: dbError } = await supabase
         .from("images")
         .delete()
         .eq("id", id);
 
-      if (dbError) throw dbError;
+      if (dbError) {
+        throw dbError;
+      }
 
-      setImages((prev) => prev.filter((img) => img.id !== id));
+      // Cập nhật giao diện
+      setImages((prev) =>
+        prev.filter((img) => img.id !== id)
+      );
+
       alert("Xóa ảnh thành công!");
     } catch (error: any) {
-      alert("Lỗi xóa ảnh: " + error.message);
+      console.error("Lỗi xóa ảnh:", error);
+
+      alert(
+        "Lỗi xóa ảnh: " +
+          (error?.message || "Không xác định được lỗi.")
+      );
     }
   };
 
   return (
-    <div style={{ minHeight: "100vh", backgroundColor: "#f8f9fa", fontFamily: "sans-serif" }}>
-      <header style={{ backgroundColor: "#fff", padding: "20px 80px", borderBottom: "1px solid #e9ecef" }}>
-        <h1 style={{ margin: 0, fontSize: "28px", fontWeight: "bold" }}>VietAnh Gallery</h1>
+    <div
+      style={{
+        minHeight: "100vh",
+        backgroundColor: "#f8f9fa",
+        fontFamily: "Arial, sans-serif",
+      }}
+    >
+      {/* HEADER */}
+      <header
+        style={{
+          backgroundColor: "#fff",
+          padding: "20px 80px",
+          borderBottom: "1px solid #e9ecef",
+        }}
+      >
+        <h1
+          style={{
+            margin: 0,
+            fontSize: "28px",
+            fontWeight: "bold",
+          }}
+        >
+          VietAnh Gallery
+        </h1>
       </header>
 
-      <main style={{ maxWidth: "1000px", margin: "40px auto", padding: "0 20px" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: "30px" }}>
+      {/* MAIN */}
+      <main
+        style={{
+          maxWidth: "1000px",
+          margin: "40px auto",
+          padding: "0 20px",
+        }}
+      >
+        {/* TITLE + UPLOAD */}
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-end",
+            marginBottom: "30px",
+            gap: "20px",
+          }}
+        >
           <div>
-            <h2 style={{ fontSize: "36px", fontWeight: "bold", margin: "0 0 10px 0" }}>Ảnh đã tải lên</h2>
-            <p style={{ color: "#6c757d", margin: 0 }}>Kho ảnh lưu trữ cố định</p>
+            <h2
+              style={{
+                fontSize: "36px",
+                fontWeight: "bold",
+                margin: "0 0 10px 0",
+              }}
+            >
+              Ảnh đã tải lên
+            </h2>
+
+            <p
+              style={{
+                color: "#6c757d",
+                margin: 0,
+              }}
+            >
+              Kho ảnh lưu trữ cố định
+            </p>
           </div>
 
-          <label style={{
-            backgroundColor: "#000",
-            color: "#fff",
-            padding: "10px 20px",
-            borderRadius: "8px",
-            cursor: "pointer",
-            fontWeight: "500"
-          }}>
+          {/* NÚT UPLOAD */}
+          <label
+            style={{
+              backgroundColor: uploading ? "#555" : "#000",
+              color: "#fff",
+              padding: "10px 20px",
+              borderRadius: "8px",
+              cursor: uploading ? "not-allowed" : "pointer",
+              fontWeight: "500",
+              whiteSpace: "nowrap",
+            }}
+          >
             {uploading ? "Đang tải..." : "+ Tải ảnh mới"}
-            <input type="file" accept="image/*" onChange={handleUpload} disabled={uploading} style={{ display: "none" }} />
+
+            <input
+              type="file"
+              accept="image/*"
+              onChange={handleUpload}
+              disabled={uploading}
+              style={{
+                display: "none",
+              }}
+            />
           </label>
         </div>
 
+        {/* DANH SÁCH ẢNH */}
         {loading ? (
-          <p style={{ color: "#6c757d" }}>Đang tải danh sách ảnh...</p>
+          <p
+            style={{
+              color: "#6c757d",
+            }}
+          >
+            Đang tải danh sách ảnh...
+          </p>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "24px" }}>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns:
+                "repeat(auto-fill, minmax(280px, 1fr))",
+              gap: "24px",
+            }}
+          >
             {images.map((img) => (
-              <div key={img.id || img.name} style={{
-                backgroundColor: "#fff",
-                borderRadius: "16px",
-                overflow: "hidden",
-                boxShadow: "0 4px 12px rgba(0,0,0,0.05)",
-                display: "flex",
-                flexDirection: "column"
-              }}>
-                <div style={{ height: "280px", overflow: "hidden", backgroundColor: "#e9ecef" }}>
-                  <img src={img.url} alt={img.title} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+              <div
+                key={img.id || img.name}
+                style={{
+                  backgroundColor: "#fff",
+                  borderRadius: "16px",
+                  overflow: "hidden",
+                  boxShadow:
+                    "0 4px 12px rgba(0,0,0,0.05)",
+                  display: "flex",
+                  flexDirection: "column",
+                }}
+              >
+                {/* ẢNH */}
+                <div
+                  style={{
+                    height: "280px",
+                    overflow: "hidden",
+                    backgroundColor: "#e9ecef",
+                  }}
+                >
+                  <img
+                    src={img.url}
+                    alt={img.title}
+                    style={{
+                      width: "100%",
+                      height: "100%",
+                      objectFit: "cover",
+                    }}
+                  />
                 </div>
 
-                <div style={{ padding: "16px", flexGrow: 1, display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
+                {/* THÔNG TIN */}
+                <div
+                  style={{
+                    padding: "16px",
+                    flexGrow: 1,
+                    display: "flex",
+                    flexDirection: "column",
+                    justifyContent: "space-between",
+                  }}
+                >
                   <div>
-                    <h3 style={{ margin: "0 0 4px 0", fontSize: "18px", fontWeight: "bold" }}>{img.title}</h3>
-                    <p style={{ margin: "0 0 12px 0", color: "#6c757d", fontSize: "14px" }}>{img.author}</p>
+                    <h3
+                      style={{
+                        margin: "0 0 4px 0",
+                        fontSize: "18px",
+                        fontWeight: "bold",
+                      }}
+                    >
+                      {img.title}
+                    </h3>
+
+                    <p
+                      style={{
+                        margin: "0 0 12px 0",
+                        color: "#6c757d",
+                        fontSize: "14px",
+                      }}
+                    >
+                      {img.author}
+                    </p>
                   </div>
 
+                  {/* XÓA */}
                   <button
-                    onClick={() => handleDelete(img.id, img.name)}
+                    onClick={() =>
+                      handleDelete(img.id, img.name)
+                    }
                     style={{
                       backgroundColor: "#fff0f0",
                       color: "#dc3545",
@@ -195,7 +410,7 @@ export default function Home() {
                       cursor: "pointer",
                       fontSize: "14px",
                       fontWeight: "500",
-                      width: "100%"
+                      width: "100%",
                     }}
                   >
                     Xóa ảnh
@@ -204,17 +419,20 @@ export default function Home() {
               </div>
             ))}
 
+            {/* CHƯA CÓ ẢNH */}
             {images.length === 0 && (
-              <div style={{
-                backgroundColor: "#e9ecef",
-                borderRadius: "16px",
-                height: "360px",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                color: "#6c757d",
-                gridColumn: "1 / -1"
-              }}>
+              <div
+                style={{
+                  backgroundColor: "#e9ecef",
+                  borderRadius: "16px",
+                  height: "360px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  color: "#6c757d",
+                  gridColumn: "1 / -1",
+                }}
+              >
                 Chưa có ảnh nào trong bộ sưu tập
               </div>
             )}
