@@ -16,6 +16,7 @@ export default function Home() {
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  // 1. Lấy danh sách ảnh từ Supabase Database
   const fetchImages = async () => {
     try {
       setLoading(true);
@@ -37,15 +38,27 @@ export default function Home() {
     fetchImages();
   }, []);
 
+  // 2. Xử lý Upload ảnh lên Supabase Storage
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     try {
       setUploading(true);
       const file = e.target.files?.[0];
       if (!file) return;
 
-      const fileExt = file.name.split(".").pop();
-      const fileName = `${Date.now()}.${fileExt}`;
+      // Lấy đuôi file
+      const fileExt = file.name.split(".").pop() || "jpg";
+      
+      // Tạo tên file an toàn tuyệt đối (Chỉ dùng chữ cái tiếng Anh không dấu và số)
+      const cleanName = file.name
+        .split(".")[0]
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "") // Xóa dấu tiếng Việt
+        .replace(/[^a-zA-Z0-9]/g, "_")  // Sửa ký tự đặc biệt/khoảng trắng thành _
+        .toLowerCase();
 
+      const fileName = `${Date.now()}_${cleanName}.${fileExt}`;
+
+      // Upload lên Supabase Storage (Bucket name: 'images')
       const { error: uploadError } = await supabase.storage
         .from("images")
         .upload(fileName, file, {
@@ -55,19 +68,21 @@ export default function Home() {
 
       if (uploadError) throw uploadError;
 
+      // Lấy đường link công khai của ảnh
       const { data: urlData } = supabase.storage
         .from("images")
         .getPublicUrl(fileName);
 
-      const titleName = file.name.split(".")[0] || "Khoảnh khắc mới";
+      const originalTitle = file.name.split(".")[0] || "Khoảnh khắc mới";
 
+      // Lưu thông tin ảnh vào bảng Database 'images'
       const { data: dbData, error: dbError } = await supabase
         .from("images")
         .insert([
           {
             name: fileName,
             url: urlData.publicUrl,
-            title: titleName,
+            title: originalTitle,
             author: "Người dùng VietAnh",
           },
         ])
@@ -84,6 +99,34 @@ export default function Home() {
       alert("Lỗi tải ảnh: " + error.message);
     } finally {
       setUploading(false);
+    }
+  };
+
+  // 3. Xử lý Xóa ảnh
+  const handleDelete = async (id?: number, fileName?: string) => {
+    if (!id || !fileName) return;
+    if (!confirm("Bạn có chắc chắn muốn xóa ảnh này?")) return;
+
+    try {
+      // Xóa file khỏi Storage
+      const { error: storageError } = await supabase.storage
+        .from("images")
+        .remove([fileName]);
+
+      if (storageError) throw storageError;
+
+      // Xóa bản ghi khỏi Database
+      const { error: dbError } = await supabase
+        .from("images")
+        .delete()
+        .eq("id", id);
+
+      if (dbError) throw dbError;
+
+      setImages((prev) => prev.filter((img) => img.id !== id));
+      alert("Xóa ảnh thành công!");
+    } catch (error: any) {
+      alert("Lỗi xóa ảnh: " + error.message);
     }
   };
 
@@ -122,17 +165,54 @@ export default function Home() {
                 backgroundColor: "#fff",
                 borderRadius: "16px",
                 overflow: "hidden",
-                boxShadow: "0 4px 12px rgba(0,0,0,0.05)"
+                boxShadow: "0 4px 12px rgba(0,0,0,0.05)",
+                display: "flex",
+                flexDirection: "column"
               }}>
                 <div style={{ height: "280px", overflow: "hidden", backgroundColor: "#e9ecef" }}>
                   <img src={img.url} alt={img.title} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                 </div>
-                <div style={{ padding: "16px" }}>
-                  <h3 style={{ margin: "0 0 4px 0", fontSize: "18px", fontWeight: "bold" }}>{img.title}</h3>
-                  <p style={{ margin: 0, color: "#6c757d", fontSize: "14px" }}>{img.author}</p>
+
+                <div style={{ padding: "16px", flexGrow: 1, display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
+                  <div>
+                    <h3 style={{ margin: "0 0 4px 0", fontSize: "18px", fontWeight: "bold" }}>{img.title}</h3>
+                    <p style={{ margin: "0 0 12px 0", color: "#6c757d", fontSize: "14px" }}>{img.author}</p>
+                  </div>
+
+                  <button
+                    onClick={() => handleDelete(img.id, img.name)}
+                    style={{
+                      backgroundColor: "#fff0f0",
+                      color: "#dc3545",
+                      border: "1px solid #ffcdd2",
+                      padding: "8px 12px",
+                      borderRadius: "6px",
+                      cursor: "pointer",
+                      fontSize: "14px",
+                      fontWeight: "500",
+                      width: "100%"
+                    }}
+                  >
+                    Xóa ảnh
+                  </button>
                 </div>
               </div>
             ))}
+
+            {images.length === 0 && (
+              <div style={{
+                backgroundColor: "#e9ecef",
+                borderRadius: "16px",
+                height: "360px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "#6c757d",
+                gridColumn: "1 / -1"
+              }}>
+                Chưa có ảnh nào trong bộ sưu tập
+              </div>
+            )}
           </div>
         )}
       </main>
