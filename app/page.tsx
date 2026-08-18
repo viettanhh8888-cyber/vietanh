@@ -11,19 +11,39 @@ interface ImageItem {
   author: string;
 }
 
+interface LikeItem {
+  id: number;
+  image_id: number;
+  user_name: string;
+}
+
+interface CommentItem {
+  id: number;
+  image_id: number;
+  user_name: string;
+  content: string;
+  created_at: string;
+}
+
 export default function Home() {
   const [images, setImages] = useState<ImageItem[]>([]);
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  // Lưu trạng thái Like tạm thời trên giao diện
+  // LIKE
   const [likedImages, setLikedImages] = useState<number[]>([]);
   const [likeCounts, setLikeCounts] = useState<Record<number, number>>({});
 
-  // Ảnh đang mở phần bình luận
+  // COMMENT
+  const [comments, setComments] = useState<CommentItem[]>([]);
   const [commentImage, setCommentImage] = useState<number | null>(null);
+  const [commentText, setCommentText] = useState("");
+  const [sendingComment, setSendingComment] = useState(false);
 
-  // Lấy danh sách ảnh từ Database
+  // =========================================================
+  // LẤY DANH SÁCH ẢNH
+  // =========================================================
+
   const fetchImages = async () => {
     try {
       setLoading(true);
@@ -42,42 +62,236 @@ export default function Home() {
       }
     } catch (error: any) {
       console.error("Lỗi lấy danh sách ảnh:", error);
-      alert("Lỗi lấy danh sách ảnh: " + error.message);
+
+      alert(
+        "Lỗi lấy danh sách ảnh: " +
+          (error?.message || "Không xác định được lỗi.")
+      );
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => {
-    fetchImages();
-  }, []);
+  // =========================================================
+  // LẤY LIKE + COMMENT
+  // =========================================================
 
-  // Xử lý Like
-  const handleLike = (id?: number) => {
-    if (!id) return;
+  const fetchLikesAndComments = async () => {
+    try {
+      // Lấy likes
+      const { data: likesData, error: likesError } = await supabase
+        .from("likes")
+        .select("*");
 
-    const alreadyLiked = likedImages.includes(id);
+      if (likesError) {
+        throw likesError;
+      }
 
-    if (alreadyLiked) {
-      setLikedImages((prev) =>
-        prev.filter((imageId) => imageId !== id)
+      if (likesData) {
+        const counts: Record<number, number> = {};
+        const liked: number[] = [];
+
+        likesData.forEach((like: LikeItem) => {
+          counts[like.image_id] =
+            (counts[like.image_id] || 0) + 1;
+
+          // Người dùng hiện tại được tạm xác định bằng user_name
+          if (like.user_name === "Người dùng VietAnh") {
+            liked.push(like.image_id);
+          }
+        });
+
+        setLikeCounts(counts);
+        setLikedImages(liked);
+      }
+
+      // Lấy comments
+      const { data: commentsData, error: commentsError } =
+        await supabase
+          .from("comments")
+          .select("*")
+          .order("created_at", { ascending: true });
+
+      if (commentsError) {
+        throw commentsError;
+      }
+
+      if (commentsData) {
+        setComments(commentsData);
+      }
+    } catch (error: any) {
+      console.error("Lỗi lấy Like/Bình luận:", error);
+
+      alert(
+        "Lỗi lấy Like/Bình luận: " +
+          (error?.message || "Không xác định được lỗi.")
       );
-
-      setLikeCounts((prev) => ({
-        ...prev,
-        [id]: Math.max((prev[id] || 1) - 1, 0),
-      }));
-    } else {
-      setLikedImages((prev) => [...prev, id]);
-
-      setLikeCounts((prev) => ({
-        ...prev,
-        [id]: (prev[id] || 0) + 1,
-      }));
     }
   };
 
-  // Làm sạch tên file
+  useEffect(() => {
+    fetchImages();
+    fetchLikesAndComments();
+  }, []);
+
+  // =========================================================
+  // LIKE
+  // =========================================================
+
+  const handleLike = async (imageId?: number) => {
+    if (!imageId) return;
+
+    try {
+      const alreadyLiked = likedImages.includes(imageId);
+
+      if (alreadyLiked) {
+        // BỎ LIKE
+        const { error } = await supabase
+          .from("likes")
+          .delete()
+          .eq("image_id", imageId)
+          .eq("user_name", "Người dùng VietAnh");
+
+        if (error) {
+          throw error;
+        }
+
+        setLikedImages((prev) =>
+          prev.filter((id) => id !== imageId)
+        );
+
+        setLikeCounts((prev) => ({
+          ...prev,
+          [imageId]: Math.max(
+            (prev[imageId] || 1) - 1,
+            0
+          ),
+        }));
+      } else {
+        // THÊM LIKE
+        const { error } = await supabase
+          .from("likes")
+          .insert({
+            image_id: imageId,
+            user_name: "Người dùng VietAnh",
+          });
+
+        if (error) {
+          throw error;
+        }
+
+        setLikedImages((prev) => [
+          ...prev,
+          imageId,
+        ]);
+
+        setLikeCounts((prev) => ({
+          ...prev,
+          [imageId]: (prev[imageId] || 0) + 1,
+        }));
+      }
+    } catch (error: any) {
+      console.error("Lỗi Like:", error);
+
+      alert(
+        "Lỗi Like: " +
+          (error?.message || "Không xác định được lỗi.")
+      );
+    }
+  };
+
+  // =========================================================
+  // COMMENT
+  // =========================================================
+
+  const handleSendComment = async (imageId?: number) => {
+    if (!imageId) return;
+
+    const text = commentText.trim();
+
+    if (!text) {
+      return;
+    }
+
+    try {
+      setSendingComment(true);
+
+      const { data, error } = await supabase
+        .from("comments")
+        .insert({
+          image_id: imageId,
+          user_name: "Người dùng VietAnh",
+          content: text,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        throw error;
+      }
+
+      if (data) {
+        setComments((prev) => [
+          ...prev,
+          data,
+        ]);
+      }
+
+      setCommentText("");
+    } catch (error: any) {
+      console.error("Lỗi gửi bình luận:", error);
+
+      alert(
+        "Lỗi gửi bình luận: " +
+          (error?.message || "Không xác định được lỗi.")
+      );
+    } finally {
+      setSendingComment(false);
+    }
+  };
+
+  // =========================================================
+  // XÓA BÌNH LUẬN
+  // =========================================================
+
+  const handleDeleteComment = async (commentId: number) => {
+    const confirmed = confirm(
+      "Bạn có chắc chắn muốn xóa bình luận này?"
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      const { error } = await supabase
+        .from("comments")
+        .delete()
+        .eq("id", commentId);
+
+      if (error) {
+        throw error;
+      }
+
+      setComments((prev) =>
+        prev.filter(
+          (comment) => comment.id !== commentId
+        )
+      );
+    } catch (error: any) {
+      console.error("Lỗi xóa bình luận:", error);
+
+      alert(
+        "Lỗi xóa bình luận: " +
+          (error?.message || "Không xác định được lỗi.")
+      );
+    }
+  };
+
+  // =========================================================
+  // LÀM SẠCH TÊN FILE
+  // =========================================================
+
   const createSafeFileName = (originalName: string) => {
     const parts = originalName.split(".");
 
@@ -100,18 +314,21 @@ export default function Home() {
       .replace(/^_+|_+$/g, "")
       .toLowerCase();
 
-    const safeName = nameWithoutExtension || "image";
+    const safeName =
+      nameWithoutExtension || "image";
 
     return `${Date.now()}_${safeName}.${extension || "jpg"}`;
   };
 
-  // Upload ảnh
+  // =========================================================
+  // UPLOAD ẢNH
+  // =========================================================
+
   const handleUpload = async (
     e: React.ChangeEvent<HTMLInputElement>
   ) => {
     const originalFile = e.target.files?.[0];
 
-    // Reset input
     e.target.value = "";
 
     if (!originalFile) {
@@ -121,63 +338,80 @@ export default function Home() {
     try {
       setUploading(true);
 
-      // Kiểm tra file có phải ảnh không
       if (!originalFile.type.startsWith("image/")) {
-        throw new Error("Vui lòng chọn một file ảnh.");
+        throw new Error(
+          "Vui lòng chọn một file ảnh."
+        );
       }
 
-      // Giới hạn 10MB
-      if (originalFile.size > 10 * 1024 * 1024) {
-        throw new Error("Ảnh không được lớn hơn 10MB.");
+      if (
+        originalFile.size >
+        10 * 1024 * 1024
+      ) {
+        throw new Error(
+          "Ảnh không được lớn hơn 10MB."
+        );
       }
 
-      // Tạo tên file an toàn
-      const fileName = createSafeFileName(originalFile.name);
+      const fileName =
+        createSafeFileName(
+          originalFile.name
+        );
 
-      console.log("Tên file upload:", fileName);
-
-      // Upload lên Supabase Storage
-      const { error: uploadError } = await supabase.storage
-        .from("images")
-        .upload(fileName, originalFile, {
-          cacheControl: "3600",
-          upsert: false,
-          contentType: originalFile.type,
-        });
+      // Upload Storage
+      const { error: uploadError } =
+        await supabase.storage
+          .from("images")
+          .upload(
+            fileName,
+            originalFile,
+            {
+              cacheControl: "3600",
+              upsert: false,
+              contentType:
+                originalFile.type,
+            }
+          );
 
       if (uploadError) {
         throw uploadError;
       }
 
-      // Lấy URL công khai
-      const { data: urlData } = supabase.storage
-        .from("images")
-        .getPublicUrl(fileName);
+      // Public URL
+      const { data: urlData } =
+        supabase.storage
+          .from("images")
+          .getPublicUrl(fileName);
 
       if (!urlData?.publicUrl) {
-        throw new Error("Không lấy được đường dẫn ảnh.");
+        throw new Error(
+          "Không lấy được đường dẫn ảnh."
+        );
       }
 
-      // Tên hiển thị giữ nguyên tên gốc
       const originalTitle =
-        originalFile.name.replace(/\.[^/.]+$/, "") ||
+        originalFile.name.replace(
+          /\.[^/.]+$/,
+          ""
+        ) ||
         "Khoảnh khắc mới";
 
-      // Lưu thông tin vào Database
-      const { data: dbData, error: dbError } = await supabase
-        .from("images")
-        .insert([
-          {
-            name: fileName,
-            url: urlData.publicUrl,
-            title: originalTitle,
-            author: "Người dùng VietAnh",
-          },
-        ])
-        .select();
+      // Lưu Database
+      const { data: dbData, error: dbError } =
+        await supabase
+          .from("images")
+          .insert([
+            {
+              name: fileName,
+              url: urlData.publicUrl,
+              title: originalTitle,
+              author:
+                "Người dùng VietAnh",
+            },
+          ])
+          .select();
 
       if (dbError) {
-        // Nếu Database lỗi thì xóa ảnh vừa upload
         await supabase.storage
           .from("images")
           .remove([fileName]);
@@ -185,24 +419,39 @@ export default function Home() {
         throw dbError;
       }
 
-      if (dbData && dbData.length > 0) {
-        setImages((prev) => [dbData[0], ...prev]);
+      if (
+        dbData &&
+        dbData.length > 0
+      ) {
+        setImages((prev) => [
+          dbData[0],
+          ...prev,
+        ]);
       }
 
-      alert("Tải ảnh lên thành công!");
+      alert(
+        "Tải ảnh lên thành công!"
+      );
     } catch (error: any) {
-      console.error("Lỗi upload:", error);
+      console.error(
+        "Lỗi upload:",
+        error
+      );
 
       alert(
         "Lỗi tải ảnh: " +
-          (error?.message || "Không xác định được lỗi.")
+          (error?.message ||
+            "Không xác định được lỗi.")
       );
     } finally {
       setUploading(false);
     }
   };
 
-  // Xóa ảnh
+  // =========================================================
+  // XÓA ẢNH
+  // =========================================================
+
   const handleDelete = async (
     id?: number,
     fileName?: string
@@ -220,8 +469,10 @@ export default function Home() {
     }
 
     try {
-      // Xóa file trong Storage
-      const { error: storageError } = await supabase.storage
+      // Xóa Storage
+      const {
+        error: storageError,
+      } = await supabase.storage
         .from("images")
         .remove([fileName]);
 
@@ -230,7 +481,9 @@ export default function Home() {
       }
 
       // Xóa Database
-      const { error: dbError } = await supabase
+      const {
+        error: dbError,
+      } = await supabase
         .from("images")
         .delete()
         .eq("id", id);
@@ -239,44 +492,68 @@ export default function Home() {
         throw dbError;
       }
 
-      // Cập nhật giao diện
       setImages((prev) =>
-        prev.filter((img) => img.id !== id)
+        prev.filter(
+          (img) => img.id !== id
+        )
       );
 
-      // Xóa trạng thái Like của ảnh
       setLikedImages((prev) =>
-        prev.filter((imageId) => imageId !== id)
+        prev.filter(
+          (imageId) =>
+            imageId !== id
+        )
       );
 
       setLikeCounts((prev) => {
-        const newCounts = { ...prev };
+        const newCounts = {
+          ...prev,
+        };
+
         delete newCounts[id];
+
         return newCounts;
       });
 
-      // Đóng bình luận nếu đang mở
+      setComments((prev) =>
+        prev.filter(
+          (comment) =>
+            comment.image_id !== id
+        )
+      );
+
       if (commentImage === id) {
         setCommentImage(null);
       }
 
-      alert("Xóa ảnh thành công!");
+      alert(
+        "Xóa ảnh thành công!"
+      );
     } catch (error: any) {
-      console.error("Lỗi xóa ảnh:", error);
+      console.error(
+        "Lỗi xóa ảnh:",
+        error
+      );
 
       alert(
         "Lỗi xóa ảnh: " +
-          (error?.message || "Không xác định được lỗi.")
+          (error?.message ||
+            "Không xác định được lỗi.")
       );
     }
   };
+
+  // =========================================================
+  // HIỂN THỊ
+  // =========================================================
 
   return (
     <div
       style={{
         minHeight: "100vh",
         backgroundColor: "#f8f9fa",
-        fontFamily: "Arial, sans-serif",
+        fontFamily:
+          "Arial, sans-serif",
       }}
     >
       {/* HEADER */}
@@ -284,7 +561,8 @@ export default function Home() {
         style={{
           backgroundColor: "#fff",
           padding: "20px 80px",
-          borderBottom: "1px solid #e9ecef",
+          borderBottom:
+            "1px solid #e9ecef",
         }}
       >
         <h1
@@ -310,7 +588,8 @@ export default function Home() {
         <div
           style={{
             display: "flex",
-            justifyContent: "space-between",
+            justifyContent:
+              "space-between",
             alignItems: "flex-end",
             marginBottom: "30px",
             gap: "20px",
@@ -321,7 +600,8 @@ export default function Home() {
               style={{
                 fontSize: "36px",
                 fontWeight: "bold",
-                margin: "0 0 10px 0",
+                margin:
+                  "0 0 10px 0",
               }}
             >
               Ảnh đã tải lên
@@ -337,24 +617,36 @@ export default function Home() {
             </p>
           </div>
 
-          {/* NÚT UPLOAD */}
+          {/* UPLOAD */}
           <label
             style={{
-              backgroundColor: uploading ? "#555" : "#000",
+              backgroundColor:
+                uploading
+                  ? "#555"
+                  : "#000",
               color: "#fff",
-              padding: "10px 20px",
+              padding:
+                "10px 20px",
               borderRadius: "8px",
-              cursor: uploading ? "not-allowed" : "pointer",
+              cursor:
+                uploading
+                  ? "not-allowed"
+                  : "pointer",
               fontWeight: "500",
-              whiteSpace: "nowrap",
+              whiteSpace:
+                "nowrap",
             }}
           >
-            {uploading ? "Đang tải..." : "+ Tải ảnh mới"}
+            {uploading
+              ? "Đang tải..."
+              : "+ Tải ảnh mới"}
 
             <input
               type="file"
               accept="image/*"
-              onChange={handleUpload}
+              onChange={
+                handleUpload
+              }
               disabled={uploading}
               style={{
                 display: "none",
@@ -381,68 +673,105 @@ export default function Home() {
               gap: "24px",
             }}
           >
-            {images.map((img) => {
-              const id = img.id;
+            {images.map(
+              (img) => {
+                const id =
+                  img.id;
 
-              const isLiked =
-                id !== undefined && likedImages.includes(id);
+                const isLiked =
+                  id !== undefined &&
+                  likedImages.includes(
+                    id
+                  );
 
-              const likes =
-                id !== undefined
-                  ? likeCounts[id] || 0
-                  : 0;
+                const likes =
+                  id !== undefined
+                    ? likeCounts[id] ||
+                      0
+                    : 0;
 
-              const isCommentOpen =
-                id !== undefined && commentImage === id;
+                const imageComments =
+                  id !== undefined
+                    ? comments.filter(
+                        (comment) =>
+                          comment.image_id ===
+                          id
+                      )
+                    : [];
 
-              return (
-                <div
-                  key={img.id || img.name}
-                  style={{
-                    backgroundColor: "#fff",
-                    borderRadius: "16px",
-                    overflow: "hidden",
-                    boxShadow:
-                      "0 4px 12px rgba(0,0,0,0.05)",
-                    display: "flex",
-                    flexDirection: "column",
-                  }}
-                >
-                  {/* ẢNH */}
+                const isCommentOpen =
+                  id !== undefined &&
+                  commentImage === id;
+
+                return (
                   <div
+                    key={
+                      img.id ||
+                      img.name
+                    }
                     style={{
-                      height: "280px",
-                      overflow: "hidden",
-                      backgroundColor: "#e9ecef",
+                      backgroundColor:
+                        "#fff",
+                      borderRadius:
+                        "16px",
+                      overflow:
+                        "hidden",
+                      boxShadow:
+                        "0 4px 12px rgba(0,0,0,0.05)",
+                      display:
+                        "flex",
+                      flexDirection:
+                        "column",
                     }}
                   >
-                    <img
-                      src={img.url}
-                      alt={img.title}
-                      loading="lazy"
+                    {/* ẢNH */}
+                    <div
                       style={{
-                        width: "100%",
-                        height: "100%",
-                        objectFit: "cover",
+                        height:
+                          "280px",
+                        overflow:
+                          "hidden",
+                        backgroundColor:
+                          "#e9ecef",
                       }}
-                    />
-                  </div>
+                    >
+                      <img
+                        src={img.url}
+                        alt={
+                          img.title
+                        }
+                        loading="lazy"
+                        style={{
+                          width:
+                            "100%",
+                          height:
+                            "100%",
+                          objectFit:
+                            "cover",
+                        }}
+                      />
+                    </div>
 
-                  {/* THÔNG TIN */}
-                  <div
-                    style={{
-                      padding: "16px",
-                      flexGrow: 1,
-                      display: "flex",
-                      flexDirection: "column",
-                    }}
-                  >
-                    <div>
+                    {/* THÔNG TIN */}
+                    <div
+                      style={{
+                        padding:
+                          "16px",
+                        flexGrow: 1,
+                        display:
+                          "flex",
+                        flexDirection:
+                          "column",
+                      }}
+                    >
                       <h3
                         style={{
-                          margin: "0 0 4px 0",
-                          fontSize: "18px",
-                          fontWeight: "bold",
+                          margin:
+                            "0 0 4px 0",
+                          fontSize:
+                            "18px",
+                          fontWeight:
+                            "bold",
                         }}
                       >
                         {img.title}
@@ -450,161 +779,378 @@ export default function Home() {
 
                       <p
                         style={{
-                          margin: "0 0 14px 0",
-                          color: "#6c757d",
-                          fontSize: "14px",
+                          margin:
+                            "0 0 14px 0",
+                          color:
+                            "#6c757d",
+                          fontSize:
+                            "14px",
                         }}
                       >
                         {img.author}
                       </p>
-                    </div>
 
-                    {/* LIKE + BÌNH LUẬN */}
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "10px",
-                        borderTop: "1px solid #eee",
-                        borderBottom: "1px solid #eee",
-                        padding: "10px 0",
-                        marginBottom: "12px",
-                      }}
-                    >
-                      {/* NÚT LIKE */}
-                      <button
-                        type="button"
-                        onClick={() => handleLike(id)}
-                        style={{
-                          border: "none",
-                          background: "transparent",
-                          cursor: "pointer",
-                          fontSize: "15px",
-                          display: "flex",
-                          alignItems: "center",
-                          gap: "5px",
-                          padding: "5px",
-                        }}
-                      >
-                        <span
-                          style={{
-                            fontSize: "22px",
-                          }}
-                        >
-                          {isLiked ? "❤️" : "🤍"}
-                        </span>
-
-                        <span>
-                          {likes > 0 ? likes : "Thích"}
-                        </span>
-                      </button>
-
-                      {/* NÚT BÌNH LUẬN */}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (id !== undefined) {
-                            setCommentImage(
-                              commentImage === id ? null : id
-                            );
-                          }
-                        }}
-                        style={{
-                          border: "none",
-                          background: "transparent",
-                          cursor: "pointer",
-                          fontSize: "15px",
-                          display: "flex",
-                          alignItems: "center",
-                          gap: "5px",
-                          padding: "5px",
-                        }}
-                      >
-                        <span
-                          style={{
-                            fontSize: "21px",
-                          }}
-                        >
-                          💬
-                        </span>
-
-                        <span>Bình luận</span>
-                      </button>
-                    </div>
-
-                    {/* KHUNG BÌNH LUẬN */}
-                    {isCommentOpen && (
+                      {/* LIKE + COMMENT */}
                       <div
                         style={{
-                          backgroundColor: "#f8f9fa",
-                          borderRadius: "10px",
-                          padding: "12px",
-                          marginBottom: "12px",
+                          display:
+                            "flex",
+                          alignItems:
+                            "center",
+                          gap: "10px",
+                          borderTop:
+                            "1px solid #eee",
+                          borderBottom:
+                            "1px solid #eee",
+                          padding:
+                            "10px 0",
+                          marginBottom:
+                            "12px",
                         }}
                       >
-                        <p
+                        {/* LIKE */}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleLike(
+                              id
+                            )
+                          }
                           style={{
-                            margin: "0 0 8px 0",
-                            fontSize: "14px",
-                            color: "#6c757d",
+                            border:
+                              "none",
+                            background:
+                              "transparent",
+                            cursor:
+                              "pointer",
+                            fontSize:
+                              "15px",
+                            display:
+                              "flex",
+                            alignItems:
+                              "center",
+                            gap: "5px",
+                            padding:
+                              "5px",
                           }}
                         >
-                          Bình luận về ảnh
-                        </p>
+                          <span
+                            style={{
+                              fontSize:
+                                "22px",
+                            }}
+                          >
+                            {isLiked
+                              ? "❤️"
+                              : "🤍"}
+                          </span>
 
-                        <input
-                          type="text"
-                          placeholder="Viết bình luận..."
-                          style={{
-                            width: "100%",
-                            boxSizing: "border-box",
-                            border: "1px solid #ddd",
-                            borderRadius: "8px",
-                            padding: "9px 10px",
-                            outline: "none",
-                            backgroundColor: "#fff",
+                          <span>
+                            {likes >
+                            0
+                              ? likes
+                              : "Thích"}
+                          </span>
+                        </button>
+
+                        {/* COMMENT */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (
+                              id !==
+                              undefined
+                            ) {
+                              setCommentImage(
+                                commentImage ===
+                                  id
+                                  ? null
+                                  : id
+                              );
+                            }
                           }}
-                        />
-                      </div>
-                    )}
+                          style={{
+                            border:
+                              "none",
+                            background:
+                              "transparent",
+                            cursor:
+                              "pointer",
+                            fontSize:
+                              "15px",
+                            display:
+                              "flex",
+                            alignItems:
+                              "center",
+                            gap: "5px",
+                            padding:
+                              "5px",
+                          }}
+                        >
+                          <span
+                            style={{
+                              fontSize:
+                                "21px",
+                            }}
+                          >
+                            💬
+                          </span>
 
-                    {/* NÚT XÓA */}
-                    <button
-                      type="button"
-                      onClick={() =>
-                        handleDelete(img.id, img.name)
-                      }
-                      style={{
-                        backgroundColor: "#fff0f0",
-                        color: "#dc3545",
-                        border: "1px solid #ffcdd2",
-                        padding: "8px 12px",
-                        borderRadius: "6px",
-                        cursor: "pointer",
-                        fontSize: "14px",
-                        fontWeight: "500",
-                        width: "100%",
-                      }}
-                    >
-                      Xóa ảnh
-                    </button>
+                          <span>
+                            {imageComments.length >
+                            0
+                              ? imageComments.length
+                              : "Bình luận"}
+                          </span>
+                        </button>
+                      </div>
+
+                      {/* BÌNH LUẬN */}
+                      {isCommentOpen && (
+                        <div
+                          style={{
+                            backgroundColor:
+                              "#f8f9fa",
+                            borderRadius:
+                              "10px",
+                            padding:
+                              "12px",
+                            marginBottom:
+                              "12px",
+                          }}
+                        >
+                          {/* DANH SÁCH COMMENT */}
+                          {imageComments.length >
+                            0 && (
+                            <div
+                              style={{
+                                marginBottom:
+                                  "12px",
+                              }}
+                            >
+                              {imageComments.map(
+                                (
+                                  comment
+                                ) => (
+                                  <div
+                                    key={
+                                      comment.id
+                                    }
+                                    style={{
+                                      backgroundColor:
+                                        "#fff",
+                                      borderRadius:
+                                        "8px",
+                                      padding:
+                                        "8px 10px",
+                                      marginBottom:
+                                        "7px",
+                                      fontSize:
+                                        "14px",
+                                    }}
+                                  >
+                                    <strong>
+                                      {
+                                        comment.user_name
+                                      }
+                                    </strong>
+
+                                    <div
+                                      style={{
+                                        marginTop:
+                                          "3px",
+                                        wordBreak:
+                                          "break-word",
+                                      }}
+                                    >
+                                      {
+                                        comment.content
+                                      }
+                                    </div>
+
+                                    {/* XÓA COMMENT */}
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleDeleteComment(
+                                          comment.id
+                                        )
+                                      }
+                                      style={{
+                                        border:
+                                          "none",
+                                        background:
+                                          "transparent",
+                                        color:
+                                          "#dc3545",
+                                        cursor:
+                                          "pointer",
+                                        fontSize:
+                                          "12px",
+                                        padding:
+                                          "4px 0 0 0",
+                                      }}
+                                    >
+                                      Xóa
+                                    </button>
+                                  </div>
+                                )
+                              )}
+                            </div>
+                          )}
+
+                          {/* Ô NHẬP */}
+                          <div
+                            style={{
+                              display:
+                                "flex",
+                              gap:
+                                "6px",
+                            }}
+                          >
+                            <input
+                              type="text"
+                              value={
+                                commentText
+                              }
+                              onChange={(
+                                e
+                              ) =>
+                                setCommentText(
+                                  e.target
+                                    .value
+                                )
+                              }
+                              onKeyDown={(
+                                e
+                              ) => {
+                                if (
+                                  e.key ===
+                                  "Enter"
+                                ) {
+                                  handleSendComment(
+                                    id
+                                  );
+                                }
+                              }}
+                              placeholder="Viết bình luận..."
+                              style={{
+                                flex:
+                                  1,
+                                minWidth:
+                                  0,
+                                border:
+                                  "1px solid #ddd",
+                                borderRadius:
+                                  "8px",
+                                padding:
+                                  "9px 10px",
+                                outline:
+                                  "none",
+                                backgroundColor:
+                                  "#fff",
+                              }}
+                            />
+
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleSendComment(
+                                  id
+                                )
+                              }
+                              disabled={
+                                sendingComment ||
+                                !commentText.trim()
+                              }
+                              style={{
+                                border:
+                                  "none",
+                                borderRadius:
+                                  "8px",
+                                padding:
+                                  "0 12px",
+                                backgroundColor:
+                                  sendingComment ||
+                                  !commentText.trim()
+                                    ? "#ccc"
+                                    : "#000",
+                                color:
+                                  "#fff",
+                                cursor:
+                                  sendingComment ||
+                                  !commentText.trim()
+                                    ? "not-allowed"
+                                    : "pointer",
+                              }}
+                            >
+                              {sendingComment
+                                ? "..."
+                                : "Gửi"}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* XÓA ẢNH */}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleDelete(
+                            img.id,
+                            img.name
+                          )
+                        }
+                        style={{
+                          backgroundColor:
+                            "#fff0f0",
+                          color:
+                            "#dc3545",
+                          border:
+                            "1px solid #ffcdd2",
+                          padding:
+                            "8px 12px",
+                          borderRadius:
+                            "6px",
+                          cursor:
+                            "pointer",
+                          fontSize:
+                            "14px",
+                          fontWeight:
+                            "500",
+                          width:
+                            "100%",
+                        }}
+                      >
+                        Xóa ảnh
+                      </button>
+                    </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              }
+            )}
 
             {/* CHƯA CÓ ẢNH */}
-            {images.length === 0 && (
+            {images.length ===
+              0 && (
               <div
                 style={{
-                  backgroundColor: "#e9ecef",
-                  borderRadius: "16px",
-                  height: "360px",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  color: "#6c757d",
-                  gridColumn: "1 / -1",
+                  backgroundColor:
+                    "#e9ecef",
+                  borderRadius:
+                    "16px",
+                  height:
+                    "360px",
+                  display:
+                    "flex",
+                  alignItems:
+                    "center",
+                  justifyContent:
+                    "center",
+                  color:
+                    "#6c757d",
+                  gridColumn:
+                    "1 / -1",
                 }}
               >
                 Chưa có ảnh nào trong bộ sưu tập
