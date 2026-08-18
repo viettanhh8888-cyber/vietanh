@@ -16,6 +16,13 @@ export default function Home() {
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  // Lưu trạng thái Like tạm thời trên giao diện
+  const [likedImages, setLikedImages] = useState<number[]>([]);
+  const [likeCounts, setLikeCounts] = useState<Record<number, number>>({});
+
+  // Ảnh đang mở phần bình luận
+  const [commentImage, setCommentImage] = useState<number | null>(null);
+
   // Lấy danh sách ảnh từ Database
   const fetchImages = async () => {
     try {
@@ -45,9 +52,35 @@ export default function Home() {
     fetchImages();
   }, []);
 
+  // Xử lý Like
+  const handleLike = (id?: number) => {
+    if (!id) return;
+
+    const alreadyLiked = likedImages.includes(id);
+
+    if (alreadyLiked) {
+      setLikedImages((prev) =>
+        prev.filter((imageId) => imageId !== id)
+      );
+
+      setLikeCounts((prev) => ({
+        ...prev,
+        [id]: Math.max((prev[id] || 1) - 1, 0),
+      }));
+    } else {
+      setLikedImages((prev) => [...prev, id]);
+
+      setLikeCounts((prev) => ({
+        ...prev,
+        [id]: (prev[id] || 0) + 1,
+      }));
+    }
+  };
+
   // Làm sạch tên file
   const createSafeFileName = (originalName: string) => {
     const parts = originalName.split(".");
+
     const extension =
       parts.length > 1
         ? parts[parts.length - 1]
@@ -98,7 +131,7 @@ export default function Home() {
         throw new Error("Ảnh không được lớn hơn 10MB.");
       }
 
-      // Tạo tên file hoàn toàn không có ký tự tiếng Việt
+      // Tạo tên file an toàn
       const fileName = createSafeFileName(originalFile.name);
 
       console.log("Tên file upload:", fileName);
@@ -210,6 +243,22 @@ export default function Home() {
       setImages((prev) =>
         prev.filter((img) => img.id !== id)
       );
+
+      // Xóa trạng thái Like của ảnh
+      setLikedImages((prev) =>
+        prev.filter((imageId) => imageId !== id)
+      );
+
+      setLikeCounts((prev) => {
+        const newCounts = { ...prev };
+        delete newCounts[id];
+        return newCounts;
+      });
+
+      // Đóng bình luận nếu đang mở
+      if (commentImage === id) {
+        setCommentImage(null);
+      }
 
       alert("Xóa ảnh thành công!");
     } catch (error: any) {
@@ -332,92 +381,217 @@ export default function Home() {
               gap: "24px",
             }}
           >
-            {images.map((img) => (
-              <div
-                key={img.id || img.name}
-                style={{
-                  backgroundColor: "#fff",
-                  borderRadius: "16px",
-                  overflow: "hidden",
-                  boxShadow:
-                    "0 4px 12px rgba(0,0,0,0.05)",
-                  display: "flex",
-                  flexDirection: "column",
-                }}
-              >
-                {/* ẢNH */}
-                <div
-                  style={{
-                    height: "280px",
-                    overflow: "hidden",
-                    backgroundColor: "#e9ecef",
-                  }}
-                >
-                  <img
-                    src={img.url}
-                    alt={img.title}
-                    style={{
-                      width: "100%",
-                      height: "100%",
-                      objectFit: "cover",
-                    }}
-                  />
-                </div>
+            {images.map((img) => {
+              const id = img.id;
 
-                {/* THÔNG TIN */}
+              const isLiked =
+                id !== undefined && likedImages.includes(id);
+
+              const likes =
+                id !== undefined
+                  ? likeCounts[id] || 0
+                  : 0;
+
+              const isCommentOpen =
+                id !== undefined && commentImage === id;
+
+              return (
                 <div
+                  key={img.id || img.name}
                   style={{
-                    padding: "16px",
-                    flexGrow: 1,
+                    backgroundColor: "#fff",
+                    borderRadius: "16px",
+                    overflow: "hidden",
+                    boxShadow:
+                      "0 4px 12px rgba(0,0,0,0.05)",
                     display: "flex",
                     flexDirection: "column",
-                    justifyContent: "space-between",
                   }}
                 >
-                  <div>
-                    <h3
-                      style={{
-                        margin: "0 0 4px 0",
-                        fontSize: "18px",
-                        fontWeight: "bold",
-                      }}
-                    >
-                      {img.title}
-                    </h3>
-
-                    <p
-                      style={{
-                        margin: "0 0 12px 0",
-                        color: "#6c757d",
-                        fontSize: "14px",
-                      }}
-                    >
-                      {img.author}
-                    </p>
-                  </div>
-
-                  {/* XÓA */}
-                  <button
-                    onClick={() =>
-                      handleDelete(img.id, img.name)
-                    }
+                  {/* ẢNH */}
+                  <div
                     style={{
-                      backgroundColor: "#fff0f0",
-                      color: "#dc3545",
-                      border: "1px solid #ffcdd2",
-                      padding: "8px 12px",
-                      borderRadius: "6px",
-                      cursor: "pointer",
-                      fontSize: "14px",
-                      fontWeight: "500",
-                      width: "100%",
+                      height: "280px",
+                      overflow: "hidden",
+                      backgroundColor: "#e9ecef",
                     }}
                   >
-                    Xóa ảnh
-                  </button>
+                    <img
+                      src={img.url}
+                      alt={img.title}
+                      loading="lazy"
+                      style={{
+                        width: "100%",
+                        height: "100%",
+                        objectFit: "cover",
+                      }}
+                    />
+                  </div>
+
+                  {/* THÔNG TIN */}
+                  <div
+                    style={{
+                      padding: "16px",
+                      flexGrow: 1,
+                      display: "flex",
+                      flexDirection: "column",
+                    }}
+                  >
+                    <div>
+                      <h3
+                        style={{
+                          margin: "0 0 4px 0",
+                          fontSize: "18px",
+                          fontWeight: "bold",
+                        }}
+                      >
+                        {img.title}
+                      </h3>
+
+                      <p
+                        style={{
+                          margin: "0 0 14px 0",
+                          color: "#6c757d",
+                          fontSize: "14px",
+                        }}
+                      >
+                        {img.author}
+                      </p>
+                    </div>
+
+                    {/* LIKE + BÌNH LUẬN */}
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "10px",
+                        borderTop: "1px solid #eee",
+                        borderBottom: "1px solid #eee",
+                        padding: "10px 0",
+                        marginBottom: "12px",
+                      }}
+                    >
+                      {/* NÚT LIKE */}
+                      <button
+                        type="button"
+                        onClick={() => handleLike(id)}
+                        style={{
+                          border: "none",
+                          background: "transparent",
+                          cursor: "pointer",
+                          fontSize: "15px",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "5px",
+                          padding: "5px",
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontSize: "22px",
+                          }}
+                        >
+                          {isLiked ? "❤️" : "🤍"}
+                        </span>
+
+                        <span>
+                          {likes > 0 ? likes : "Thích"}
+                        </span>
+                      </button>
+
+                      {/* NÚT BÌNH LUẬN */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (id !== undefined) {
+                            setCommentImage(
+                              commentImage === id ? null : id
+                            );
+                          }
+                        }}
+                        style={{
+                          border: "none",
+                          background: "transparent",
+                          cursor: "pointer",
+                          fontSize: "15px",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "5px",
+                          padding: "5px",
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontSize: "21px",
+                          }}
+                        >
+                          💬
+                        </span>
+
+                        <span>Bình luận</span>
+                      </button>
+                    </div>
+
+                    {/* KHUNG BÌNH LUẬN */}
+                    {isCommentOpen && (
+                      <div
+                        style={{
+                          backgroundColor: "#f8f9fa",
+                          borderRadius: "10px",
+                          padding: "12px",
+                          marginBottom: "12px",
+                        }}
+                      >
+                        <p
+                          style={{
+                            margin: "0 0 8px 0",
+                            fontSize: "14px",
+                            color: "#6c757d",
+                          }}
+                        >
+                          Bình luận về ảnh
+                        </p>
+
+                        <input
+                          type="text"
+                          placeholder="Viết bình luận..."
+                          style={{
+                            width: "100%",
+                            boxSizing: "border-box",
+                            border: "1px solid #ddd",
+                            borderRadius: "8px",
+                            padding: "9px 10px",
+                            outline: "none",
+                            backgroundColor: "#fff",
+                          }}
+                        />
+                      </div>
+                    )}
+
+                    {/* NÚT XÓA */}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleDelete(img.id, img.name)
+                      }
+                      style={{
+                        backgroundColor: "#fff0f0",
+                        color: "#dc3545",
+                        border: "1px solid #ffcdd2",
+                        padding: "8px 12px",
+                        borderRadius: "6px",
+                        cursor: "pointer",
+                        fontSize: "14px",
+                        fontWeight: "500",
+                        width: "100%",
+                      }}
+                    >
+                      Xóa ảnh
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
 
             {/* CHƯA CÓ ẢNH */}
             {images.length === 0 && (
